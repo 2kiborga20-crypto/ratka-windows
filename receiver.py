@@ -1,4 +1,5 @@
 import tkinter as tk
+from tkinter import messagebox
 import requests
 import uuid
 import threading
@@ -6,189 +7,164 @@ import time
 
 API = "https://ratka66-production.up.railway.app"
 
-class Receiver:
+
+class RatkaReceiver:
     def __init__(self, root):
         self.root = root
-        self.root.title("РАТКА — приёмник сообщений")
-        self.root.geometry("440x330")
+        self.root.title("РАТКА")
+        self.root.geometry("400x250")
+        self.root.resizable(False, False)
 
         self.device_id = str(uuid.uuid4())
         self.token = None
         self.running = True
 
         tk.Label(
-            root, text="РАТКА",
-            font=("Segoe UI", 24, "bold")
-        ).pack(pady=12)
+            root,
+            text="РАТКА",
+            font=("Arial", 22, "bold")
+        ).pack(pady=15)
 
         tk.Label(
             root,
-            text="Добровольный приёмник шуточных сообщений"
+            text="Код подключения:",
+            font=("Arial", 12)
         ).pack()
 
-        tk.Label(
+        self.code_label = tk.Label(
             root,
-            text="Программа ничего не скрывает и не управляет Windows.",
-            wraplength=390
-        ).pack(pady=12)
-
-        self.status = tk.Label(root, text="Подключение...")
-        self.status.pack()
-
-        self.code = tk.Label(
-            root, text="------",
-            font=("Consolas", 26, "bold")
+            text="Получение кода...",
+            font=("Arial", 20, "bold")
         )
-        self.code.pack(pady=12)
+        self.code_label.pack(pady=10)
 
         tk.Label(
             root,
-            text="Передай этот код отправителю, если согласен подключиться."
-        ).pack(padx=15)
+            text="Введите этот код в Telegram-боте командой /pair",
+            wraplength=350
+        ).pack(pady=5)
 
         tk.Button(
             root,
             text="Отключить и закрыть",
             command=self.close
-        ).pack(pady=20)
+        ).pack(pady=12)
 
-        root.protocol("WM_DELETE_WINDOW", self.close)
+        self.root.protocol("WM_DELETE_WINDOW", self.close)
+
+        self.register_device()
 
         threading.Thread(
-            target=self.connect,
+            target=self.worker,
             daemon=True
         ).start()
 
-    def connect(self):
+    def register_device(self):
         try:
             response = requests.post(
-                API + "/api/register",
+                f"{API}/api/register",
                 json={"device_id": self.device_id},
                 timeout=10
             )
             response.raise_for_status()
 
-            code = response.json()["code"]
-            self.root.after(
-                0, lambda: self.code.config(text=code)
-            )
-            self.root.after(
-                0, lambda: self.status.config(
-                    text="Ожидание подключения..."
-                )
+            data = response.json()
+            self.code_label.config(
+                text=data.get("code", "Ошибка")
             )
 
-            while self.running:
+        except Exception:
+            self.code_label.config(text="Ошибка подключения")
+
+    def worker(self):
+        while self.running:
+            try:
                 if not self.token:
                     self.check_pairing()
                 else:
                     self.get_messages()
-                time.sleep(3)
 
-        except Exception:
-            self.root.after(
-                0, lambda: self.status.config(
-                    text="Ошибка соединения. Проверь адрес сервера."
-                )
-            )
+            except Exception:
+                pass
+
+            time.sleep(3)
 
     def check_pairing(self):
-        try:
-            response = requests.get(
-                API + "/api/status/" + self.device_id,
-                timeout=8
-            )
-            response.raise_for_status()
+        response = requests.get(
+            f"{API}/api/status/{self.device_id}",
+            timeout=10
+        )
+
+        if response.status_code == 200:
             data = response.json()
 
             if data.get("paired"):
-                self.token = data["token"]
-                self.root.after(
-                    0, lambda: self.status.config(
-                        text="Компьютер подключён!"
-                    )
-                )
-        except Exception:
-            pass
+                self.token = data.get("token")
 
-    def get_messages(self):
-        try:
-            response = requests.get(
-                API + "/api/messages/" + self.device_id,
-                headers={"X-Device-Token": self.token},
-                timeout=8
-            )
-            if response.status_code == 200:
-                for item in response.json().get("messages", []):
+                if self.token:
                     self.root.after(
                         0,
-                        lambda x=item: self.show_message(x)
+                        lambda: self.code_label.config(
+                            text="Подключено"
+                        )
                     )
-        except Exception:
-            pass
 
-    def show_message(self, item):
-        window = tk.Toplevel(self.root)
-        window.title("РАТКА — шуточное сообщение")
-        window.geometry("500x300")
-        window.configure(bg="#07140d")
-        window.attributes("-topmost", True)
+    def get_messages(self):
+        response = requests.get(
+            f"{API}/api/messages/{self.device_id}",
+            headers={"X-Device-Token": self.token},
+            timeout=10
+        )
 
-        tk.Label(
-            window,
-            text="СИМУЛЯЦИЯ / ПРАНК",
-            fg="#65ff9b",
-            bg="#07140d",
-            font=("Consolas", 15, "bold")
-        ).pack(pady=20)
+        if response.status_code != 200:
+            return
 
-        tk.Label(
-            window,
-            text=item["title"],
-            fg="#65ff9b",
-            bg="#07140d",
-            font=("Consolas", 18, "bold"),
-            wraplength=450
-        ).pack(pady=10)
+        data = response.json()
 
-        tk.Label(
-            window,
-            text=item["body"],
-            fg="white",
-            bg="#07140d",
-            font=("Segoe UI", 12),
-            wraplength=450
-        ).pack(pady=10)
+        for message in data.get("messages", []):
+            title = str(message.get("title", "Сообщение"))
+            body = str(message.get("body", ""))
 
-        tk.Label(
-            window,
-            text="Это шутка. Компьютер не взломан.",
-            fg="#a8b8ad",
-            bg="#07140d"
-        ).pack()
+            self.root.after(
+                0,
+                lambda t=title, b=body: self.show_popup(t, b)
+            )
 
-        tk.Button(
-            window,
-            text="Понятно — закрыть",
-            command=window.destroy
-        ).pack(pady=15)
+    def show_popup(self, title, body):
+        if not self.running:
+            return
+
+        popup = tk.Toplevel(self.root)
+        popup.title(title)
+        popup.geometry("400x200")
+        popup.attributes("-topmost", True)
+
+        label = tk.Label(
+            popup,
+            text=body,
+            font=("Arial", 14),
+            wraplength=350,
+            padx=20,
+            pady=20
+        )
+        label.pack(expand=True)
 
     def close(self):
         self.running = False
 
-        if self.token:
-            try:
-                requests.delete(
-                    API + "/api/device/" + self.device_id,
-                    headers={"X-Device-Token": self.token},
-                    timeout=3
-                )
-            except Exception:
-                pass
+        try:
+            requests.delete(
+                f"{API}/api/device/{self.device_id}",
+                headers={"X-Device-Token": self.token or ""},
+                timeout=5
+            )
+        except Exception:
+            pass
 
         self.root.destroy()
 
+
 if __name__ == "__main__":
     root = tk.Tk()
-    Receiver(root)
+    app = RatkaReceiver(root)
     root.mainloop()
